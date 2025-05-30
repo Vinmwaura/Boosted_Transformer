@@ -2,8 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torch.utils.checkpoint import checkpoint
-
 from .layers import (
     LinearBlock,
     PositionalEncoding,
@@ -15,17 +13,31 @@ class DecoderTransformer(nn.Module):
             num_embeddings,
             embedding_dim,
             hidden_dim,
+            is_base=True,
             num_heads=8,
             out_classes=8,
             num_blocks=4,
             activation_type="gelu"):
         super().__init__()
 
-        # Learnable Embedding and Positional Encoding.
-        self.emb_layer = nn.Embedding(
-            num_embeddings=num_embeddings,
-            embedding_dim=embedding_dim)
-        self.pos_layer = PositionalEncoding()
+        self.is_base = is_base
+
+        if self.is_base:
+            # Learnable Embedding and Positional Encoding.
+            self.emb_layer = nn.Embedding(
+                num_embeddings=num_embeddings,
+                embedding_dim=embedding_dim)
+            self.pos_layer = PositionalEncoding()
+        else:
+            self.init_block = nn.Sequential(
+                LinearBlock(
+                    in_dim=embedding_dim,
+                    out_dim=hidden_dim,
+                    use_activation=True),
+                LinearBlock(
+                    in_dim=hidden_dim,
+                    out_dim=embedding_dim,
+                    use_activation=False))
 
         # Decoder Blocks.
         self.decoder_blocks = nn.ModuleList()
@@ -46,7 +58,7 @@ class DecoderTransformer(nn.Module):
                 use_activation=True),
             LinearBlock(
                 in_dim=hidden_dim,
-                out_dim=embedding_dim,
+                out_dim=out_classes,
                 use_activation=False))
 
     def custom_load_state_dict(self, state_dict):
@@ -64,14 +76,19 @@ class DecoderTransformer(nn.Module):
                 param = param.data
             own_state[name].copy_(param)
 
-    def forward(self, x):
-        # Embedding Layer + Positional Encoding.
-        x_emb = self.emb_layer(x)
-        x_dec = self.pos_layer(x_emb)
+    def forward(self, x, x_hidden=None):
+        if self.is_base:
+            # Embedding Layer + Positional Encoding.
+            x_emb = self.emb_layer(x)
+            x_enc = self.pos_layer(x_emb)
+        else:
+            x_delta = self.init_block(x_hidden)
+            x_enc = x + x_delta
 
         # Decoder Section.
+        x_dec = 1 * x_enc
         for decoder_block in self.decoder_blocks:
             x_dec = decoder_block(x_dec)  # (N,Seq,Dim)
 
         x_classifier = self.classifier_block(x_dec)
-        return x_dec, x_classifier
+        return x_enc, x_dec, x_classifier
