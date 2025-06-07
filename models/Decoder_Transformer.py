@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 from .layers import (
     LinearBlock,
+    ResidualLinearBlock,
     PositionalEncoding,
     TransformerBlock)
 
@@ -20,24 +21,11 @@ class DecoderTransformer(nn.Module):
             activation_type="gelu"):
         super().__init__()
 
-        self.is_base = is_base
-
-        if self.is_base:
-            # Learnable Embedding and Positional Encoding.
-            self.emb_layer = nn.Embedding(
-                num_embeddings=num_embeddings,
-                embedding_dim=embedding_dim)
-            self.pos_layer = PositionalEncoding()
-        else:
-            self.init_block = nn.Sequential(
-                LinearBlock(
-                    in_dim=embedding_dim,
-                    out_dim=hidden_dim,
-                    use_activation=True),
-                LinearBlock(
-                    in_dim=hidden_dim,
-                    out_dim=embedding_dim,
-                    use_activation=False))
+        # Learnable Embedding and Positional Encoding.
+        self.emb_layer = nn.Embedding(
+            num_embeddings=num_embeddings,
+            embedding_dim=embedding_dim)
+        self.pos_layer = PositionalEncoding()
 
         # Decoder Blocks.
         self.decoder_blocks = nn.ModuleList()
@@ -49,6 +37,25 @@ class DecoderTransformer(nn.Module):
                     embedding_dim=embedding_dim,
                     self_attn_is_causal=True,
                     activation_type=activation_type))
+
+        self.is_base = is_base
+        if not self.is_base:
+            # FeedForward Layer(s).
+            self.init_ffn = nn.Sequential(
+                LinearBlock(
+                    in_dim=embedding_dim,
+                    out_dim=hidden_dim,
+                    use_activation=True,
+                    activation_type=activation_type),
+                LinearBlock(
+                    in_dim=hidden_dim,
+                    out_dim=embedding_dim,
+                    use_activation=True,
+                    activation_type=activation_type))
+            self.init_ffn_res = ResidualLinearBlock(
+                dim=embedding_dim,
+                activation_type=activation_type)
+            self.init_ffn_norm = nn.LayerNorm(embedding_dim)
 
         # Classifier Block.
         self.classifier_block = nn.Sequential(
@@ -77,13 +84,15 @@ class DecoderTransformer(nn.Module):
             own_state[name].copy_(param)
 
     def forward(self, x, x_hidden=None):
-        if self.is_base:
-            # Embedding Layer + Positional Encoding.
-            x_emb = self.emb_layer(x)
-            x_enc = self.pos_layer(x_emb)
-        else:
-            x_delta = self.init_block(x_hidden)
-            x_enc = x + x_delta
+        # Embedding Layer + Positional Encoding.
+        x_emb = self.emb_layer(x)
+        x_enc = self.pos_layer(x_emb)
+
+        if not self.is_base:
+            x_prev = self.init_ffn(x_hidden)  # (N,Seq,D)
+
+            x_enc = self.init_ffn_res(x=x_enc, x_skip=x_prev)  # (N,Seq,D)
+            x_enc = self.init_ffn_norm(x_enc)  # (N,Seq,D)
 
         # Decoder Section.
         x_dec = 1 * x_enc
@@ -91,4 +100,4 @@ class DecoderTransformer(nn.Module):
             x_dec = decoder_block(x_dec)  # (N,Seq,Dim)
 
         x_classifier = self.classifier_block(x_dec)
-        return x_enc, x_dec, x_classifier
+        return x_dec, x_classifier
