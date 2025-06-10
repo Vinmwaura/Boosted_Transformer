@@ -22,7 +22,7 @@ from utils.model_utils import (
 
 # HACK: Force the RNG to be deterministic to help when comparing model's performances.
 # Too time consuming to properly train model(s) multiple times to get a proper measure.
-seed_value = 69  # Nice!
+seed_value = 420
 
 torch.manual_seed(seed_value)
 np.random.seed(seed_value)
@@ -263,7 +263,11 @@ def main():
             step_size=lr_steps,
             gamma=lr_gamma)
 
+        # https://pytorch.org/docs/stable/amp.html
+        temp_scaler = torch.cuda.amp.GradScaler()
+
         temp_models_dict = {}
+        temp_models_dict["scaler"] = temp_scaler
         temp_models_dict["model"] = temp_model
         temp_models_dict["optim"] = temp_model_optim
         temp_models_dict["lr_scheduler"] = lr_scheduler
@@ -300,9 +304,6 @@ def main():
     for model_dict in models_list:
         model_params_size = sum(param.numel() for param in model_dict["model"].parameters())
         models_params_size.append(model_params_size)
-
-    # https://pytorch.org/docs/stable/amp.html
-    scaler = torch.cuda.amp.GradScaler()
 
     logging.info(f"{project_name}")
     logging.info(f"Output Directory: {out_dir}")
@@ -356,8 +357,9 @@ def main():
             hidden_dec = None
 
             all_tr_losses = []
-            all_tr_correct = []
             for model_dict in models_list:
+                scaler = model_dict["scaler"]
+
                 curr_model = model_dict["model"]
                 curr_model_optim = model_dict["optim"]
                 curr_lr_scheduler = model_dict["lr_scheduler"]
@@ -398,7 +400,8 @@ def main():
 
                 all_tr_losses.append(tr_loss.item())
 
-                hidden_dec = hidden_dec.clone().detach()
+                with torch.no_grad():
+                    hidden_dec = hidden_dec.clone().detach()
 
             # Test Classifier.
             all_tst_losses = []
