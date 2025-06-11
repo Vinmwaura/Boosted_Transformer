@@ -1,0 +1,11 @@
+{
+    "model_lr": 1e-4,
+    "lr_gamma": [0.75, 0.8],
+    "num_models": 2,
+    "num_heads": 32,
+    "num_decoder_blocks": 3,
+    "embedding_dim": 512,
+    "hidden_dim": 2048,
+    "context_window": 256,
+    "activation_type": "gelu"
+}
